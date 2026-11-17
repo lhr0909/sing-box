@@ -3,6 +3,7 @@ package snell
 import (
 	"context"
 	"net"
+	"slices"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -10,6 +11,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/snell/internal/legacy"
 	snellprotocol "github.com/sagernet/sing-snell"
 	"github.com/sagernet/sing-snell/snellv4"
 	"github.com/sagernet/sing-snell/snellv6"
@@ -31,6 +33,7 @@ type Outbound struct {
 	client     snellClient
 	serverAddr M.Socksaddr
 	reuse      bool
+	udp        bool
 }
 
 var (
@@ -40,7 +43,7 @@ var (
 )
 
 type snellClient interface {
-	snellprotocol.Method
+	DialPacketConn(conn net.Conn) (N.NetPacketConn, error)
 	DialContext(ctx context.Context, destination M.Socksaddr) (net.Conn, error)
 	Reset()
 	SetKeepIdleConnections(keep bool)
@@ -49,6 +52,22 @@ type snellClient interface {
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.SnellOutboundOptions) (adapter.Outbound, error) {
+	networks := options.Network.Build()
+	if options.Version == 2 {
+		if options.Network != "" && slices.Contains(networks, N.NetworkUDP) {
+			return nil, E.New("snell: version 2 does not support UDP")
+		}
+		networks = []string{N.NetworkTCP}
+		options.Reuse = true
+	}
+	if options.Version == 2 || options.Version == 3 {
+		if options.UserKey != "" {
+			return nil, E.New("snell: userkey requires version 4 or 6")
+		}
+		if options.Version == 3 && options.Reuse {
+			return nil, E.New("snell: version 3 does not support connection reuse")
+		}
+	}
 	outboundDialer, err := dialer.New(ctx, options.DialerOptions, options.ServerIsDomain())
 	if err != nil {
 		return nil, err
@@ -56,6 +75,19 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	serverAddr := options.ServerOptions.Build()
 	var client snellClient
 	switch options.Version {
+	case 2, 3:
+		var obfsMode snellprotocol.ObfsMode
+		obfsMode, err = snellprotocol.ParseObfsMode(options.ObfsOptions.ObfsMode)
+		if err != nil {
+			return nil, err
+		}
+		client, err = legacy.NewClient(legacy.ClientOptions{
+			Version: options.Version,
+			PSK:     []byte(options.PSK),
+			Obfs:    snellprotocol.ObfsConfig{Mode: obfsMode, Host: options.ObfsOptions.ObfsHost},
+			Dialer:  outboundDialer,
+			Server:  serverAddr,
+		})
 	case 4:
 		var obfsMode snellprotocol.ObfsMode
 		obfsMode, err = snellprotocol.ParseObfsMode(options.ObfsOptions.ObfsMode)
@@ -94,12 +126,13 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		return nil, err
 	}
 	outbound := &Outbound{
-		Adapter:    outbound.NewAdapterWithDialerOptions(C.TypeSnell, tag, options.Network.Build(), options.DialerOptions),
+		Adapter:    outbound.NewAdapterWithDialerOptions(C.TypeSnell, tag, networks, options.DialerOptions),
 		logger:     logger,
 		dialer:     outboundDialer,
 		client:     client,
 		serverAddr: serverAddr,
 		reuse:      options.Reuse,
+		udp:        slices.Contains(networks, N.NetworkUDP),
 	}
 	return outbound, nil
 }
@@ -117,6 +150,9 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		}
 		return h.client.DialContext(ctx, destination)
 	case N.NetworkUDP:
+		if !h.udp {
+			return nil, E.New("snell: UDP is disabled for this outbound")
+		}
 		h.logger.InfoContext(ctx, "outbound packet connection to ", destination)
 		conn, err := h.dialer.DialContext(ctx, N.NetworkTCP, h.serverAddr)
 		if err != nil {
@@ -134,6 +170,9 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 }
 
 func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if !h.udp {
+		return nil, E.New("snell: UDP is disabled for this outbound")
+	}
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = h.Tag()
 	metadata.Destination = destination
