@@ -63,7 +63,11 @@ The server port.
 
 ==Required==
 
-The Snell protocol version, one of `4` `6`.
+The Snell protocol version, one of `2` `3` `4` `6`.
+
+Version `2` supports TCP only and always enables connection reuse. Version `3`
+supports TCP and UDP over TCP, without connection reuse. Versions `2` and `3`
+do not support `userkey`.
 
 Version `4` supports HTTP obfuscation (`obfs_mode` / `obfs_host`); version `6`
 replaces it with traffic shaping (`mode`) and requires a `psk` of 12 to 255
@@ -86,7 +90,8 @@ The user key, used to authenticate against a multi-user server.
 
 #### reuse
 
-Enable connection reuse (the Snell v2 `CONNECT` command).
+Enable connection reuse (the Snell v2 `CONNECT` command). Always enabled for
+version `2`; unsupported for version `3`.
 
 #### network
 
@@ -94,23 +99,23 @@ Enabled network
 
 One of `tcp` `udp`.
 
-Both is enabled by default.
+Version `2` defaults to and only supports `tcp`; explicitly enabling `udp` is an
+error. Both networks are enabled by default for other versions.
 
 #### obfs_mode
 
-==Version 4 only==
+==Versions 2, 3 and 4 only==
 
-HTTP obfuscation mode, one of `none` `http`.
+Obfuscation mode, one of `none` `http` `tls`.
 
 `none` is used by default.
 
 #### obfs_host
 
-==Version 4 only==
+==Versions 2, 3 and 4 only==
 
-The HTTP `Host` header sent when `obfs_mode` is `http`.
-
-`bing.com` is used by default.
+The HTTP `Host` header when `obfs_mode` is `http`, or the server name when it is
+`tls`. Defaults to `bing.com` for HTTP and `cloudfront.net` for TLS.
 
 #### mode
 

@@ -63,7 +63,10 @@ icon: material/new-box
 
 ==必填==
 
-Snell 协议版本，`4` `6` 之一。
+Snell 协议版本，`2` `3` `4` `6` 之一。
+
+版本 `2` 仅支持 TCP，并自动启用连接复用。版本 `3` 支持 TCP 和通过 TCP 传输的 UDP，
+不支持连接复用。版本 `2` 和 `3` 不支持 `userkey`。
 
 版本 `4` 支持 HTTP 混淆（`obfs_mode` / `obfs_host`）；版本 `6` 以流量整形（`mode`）
 取而代之，并要求 `psk` 长度为 12 到 255 字节。
@@ -85,7 +88,7 @@ Snell 协议版本，`4` `6` 之一。
 
 #### reuse
 
-启用连接复用（Snell v2 `CONNECT` 命令）。
+启用连接复用（Snell v2 `CONNECT` 命令）。版本 `2` 始终启用；版本 `3` 不支持此选项。
 
 #### network
 
@@ -93,23 +96,23 @@ Snell 协议版本，`4` `6` 之一。
 
 `tcp` 或 `udp`。
 
-默认所有。
+版本 `2` 默认且仅支持 `tcp`；其他版本默认全部启用。显式为版本 `2` 启用 `udp` 会报错。
 
 #### obfs_mode
 
-==仅版本 4==
+==仅版本 2、3、4==
 
-HTTP 混淆模式，`none` `http` 之一。
+混淆模式，`none` `http` `tls` 之一。
 
 默认为 `none`。
 
 #### obfs_host
 
-==仅版本 4==
+==仅版本 2、3、4==
 
-`obfs_mode` 为 `http` 时发送的 HTTP `Host` 头。
+`obfs_mode` 为 `http` 时发送的 HTTP `Host` 头，或为 `tls` 时发送的服务器名称。
 
-默认为 `bing.com`。
+HTTP 默认为 `bing.com`，TLS 默认为 `cloudfront.net`。
 
 #### mode
 
