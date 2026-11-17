@@ -285,3 +285,25 @@ func TestDialCancellationAndBadDestination(t *testing.T) {
 		t.Fatal("cancel did not interrupt handshake")
 	}
 }
+
+func TestClientOptionAndCloseErrors(t *testing.T) {
+	for _, options := range []ClientOptions{{Version: 1, PSK: testPSK}, {Version: 2}, {Version: 3, PSK: testPSK, Obfs: snell.ObfsConfig{Mode: 99}}} {
+		if _, err := NewClient(options); err == nil {
+			t.Fatalf("accepted %+v", options)
+		}
+	}
+	for _, version := range []int{2, 3} {
+		c, err := NewClient(ClientOptions{Version: version, PSK: testPSK})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		if _, err = c.DialContext(context.Background(), M.ParseSocksaddr("example.com:443")); !errors.Is(err, net.ErrClosed) {
+			t.Fatal(err)
+		}
+		raw := &memoryConn{input: bytes.NewReader(nil)}
+		if _, err = c.newSession(raw); !errors.Is(err, net.ErrClosed) || !raw.closed {
+			t.Fatalf("closed client adopted transport: %v", err)
+		}
+	}
+}
