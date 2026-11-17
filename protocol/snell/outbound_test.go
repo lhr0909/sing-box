@@ -15,6 +15,7 @@ import (
 	snellprotocol "github.com/sagernet/sing-snell"
 	"github.com/sagernet/sing-snell/snellv5"
 	"github.com/sagernet/sing-snell/snellv6"
+	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -85,7 +86,22 @@ func (echoHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source, d
 		}
 	}()
 }
-func (echoHandler) NewPacketConnectionEx(context.Context, N.PacketConn, M.Socksaddr, M.Socksaddr, N.CloseHandlerFunc) {
+func (echoHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	go func() {
+		defer conn.Close()
+		for {
+			buffer := buf.NewPacket()
+			buffer.Resize(N.CalculateFrontHeadroom(conn), 0)
+			destination, err := conn.ReadPacket(buffer)
+			if err != nil {
+				buffer.Release()
+				return
+			}
+			if err = conn.WritePacket(buffer, destination); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func TestV4V6TCPRegression(t *testing.T) {
@@ -145,5 +161,60 @@ func TestV4V6TCPRegression(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestV4V6UDPRegression(t *testing.T) {
+	for _, version := range []int{4, 6} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			options := testOptions(version)
+			var service snellprotocol.Service
+			var err error
+			if version == 4 {
+				service, err = snellv5.NewService(snellv5.ServiceOptions{PSK: []byte(options.PSK), Handler: echoHandler{}})
+			} else {
+				service, err = snellv6.NewService(snellv6.ServerOptions{PSK: []byte(options.PSK), Handler: echoHandler{}})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				if err = service.NewConnection(context.Background(), conn, M.SocksaddrFromNet(conn.RemoteAddr()), nil); err != nil {
+					conn.Close()
+				}
+			}()
+			options.ServerPort = M.SocksaddrFromNet(ln.Addr()).Port
+			out, err := NewOutbound(context.Background(), nil, log.NewNOPFactory().Logger(), "test", options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := out.(*Outbound)
+			defer h.client.Close()
+			destination := M.ParseSocksaddr("127.0.0.1:53")
+			pc, err := h.ListenPacket(context.Background(), destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pc.Close()
+			pc.SetDeadline(time.Now().Add(3 * time.Second))
+			payload := []byte("existing UDP regression")
+			if _, err = pc.WriteTo(payload, destination.UDPAddr()); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, 100)
+			n, source, err := pc.ReadFrom(got)
+			if err != nil || string(got[:n]) != string(payload) || source.String() != destination.String() {
+				t.Fatalf("UDP source %v payload %q err %v", source, got[:n], err)
+			}
+		})
 	}
 }
